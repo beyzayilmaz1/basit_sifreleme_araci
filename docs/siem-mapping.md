@@ -1,11 +1,11 @@
 # SIEM Mapping — Splunk / ELK öğrenme köprüsü
 
-Bu doküman, `sifreleme_araci` audit JSONL çıktısının
-[Konsalt Güvenlik Çözümleri](https://www.konsalt.com.tr/cozumlerimiz/guvenlik-cozumleri/)
-içindeki **Splunk Enterprise Security** hikâyesine nasıl bağlandığını açıklar.
+**Sürüm:** 1.3.0  
+**İlgili:** [`OGRENME_RAPORU.md`](../OGRENME_RAPORU.md) Aşama 5, [`report.md`](../report.md) §10.2
 
-> Bu bir Splunk entegrasyonu değildir. Amaç: JR olarak “olay üret → SIEM’e taşı → kural yaz”
-> zincirini gösterebilmektir.
+Bu doküman, `sifreleme_araci` audit JSONL çıktısının [Konsalt Güvenlik Çözümleri](https://www.konsalt.com.tr/cozumlerimiz/guvenlik-cozumleri/) içindeki **Splunk Enterprise Security** hikâyesine nasıl bağlandığını açıklar.
+
+> Bu bir Splunk entegrasyonu değildir. Amaç: “olay üret → SIEM’e taşı → kural yaz” zincirini gösterebilmektir.
 
 ## Audit nasıl açılır?
 
@@ -32,20 +32,20 @@ Her satır bir JSON nesnesidir (JSONL).
 
 ## Olay kataloğu
 
-| `event` | Ne zaman? | Splunk/SOC için fikir |
+| `event` | Ne zaman? | Splunk / SOC için fikir |
 |---|---|---|
 | `encrypt_ok` | Şifreleme başarılı | Normal operasyon |
-| `encrypt_fail` | Şifreleme hata | Konfig / limit |
+| `encrypt_fail` | Şifreleme hatası | Konfigürasyon / limit |
 | `decrypt_ok` | Çözme başarılı | Erişim kaydı |
 | `decrypt_fail` | Yanlış parola / bozulma | Brute-force adayı |
 | `verify_ok` / `verify_fail` | Doğrulama | Integrity check |
-| `scan_ok` | Keşif tamam | Discovery telemetrisi |
+| `scan_ok` | Keşif tamamlandı | Discovery telemetrisi |
 | `protect_ok` / `protect_fail` | Toplu koruma | Data protection job |
 | `auth_source` | Secret kaynağı seçildi | password vs keyfile ayrımı |
 
 ## Örnek alert fikirleri (öğrenme)
 
-### 1) Kısa sürede çok decrypt_fail
+### 1) Kısa sürede çok `decrypt_fail`
 
 ```text
 index=* sourcetype=bsa_audit event=decrypt_fail
@@ -56,13 +56,13 @@ index=* sourcetype=bsa_audit event=decrypt_fail
 
 Anlam: olası çevrimdışı/çevrimiçi kaba kuvvet veya bozuk paket denemesi.
 
-### 2) Keyfile yerine password_flag kullanımı
+### 2) Keyfile yerine `password_flag` kullanımı
 
 ```text
 event=auth_source auth_source=password_flag
 ```
 
-Anlam: demo anti-pattern; production’da azaltılmalı.
+Anlam: demo anti-pattern; production’da azaltılmalıdır.
 
 ### 3) Protect job özeti
 
@@ -79,5 +79,4 @@ event=protect_ok
 
 ## Sınır
 
-Kurumsal Splunk ES; UEBA, threat intel, correlation search ve risk scoring sunar.
-Bu proje yalnızca **temiz, secrets’siz olay** üretir — SIEM’in ham maddesi.
+Kurumsal Splunk ES; UEBA, threat intel, correlation search ve risk scoring sunar. Bu proje yalnızca **temiz, secrets’siz olay** üretir — SIEM’in ham maddesi.

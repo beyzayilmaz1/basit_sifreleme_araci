@@ -1,9 +1,11 @@
 # Basit Şifreleme Aracı — Teknik Tasarım Raporu
 
 **Proje:** Dosya ve metin şifreleyen komut satırı aracı  
+**Sürüm:** 1.3.0  
 **Bağlam:** Konsalt Staj Programı 2026 — Bonus Havuzu  
 **Doküman türü:** Teknik karar ve güvenlik tasarımı raporu  
 **Hedef okuyucu:** Teknik bilgisi olan yazılım yöneticisi  
+**İlgili belgeler:** [`OGRENME_RAPORU.md`](./OGRENME_RAPORU.md) (aşama kaydı), [`SECURITY.md`](./SECURITY.md) (CVD)
 
 ---
 
@@ -11,9 +13,11 @@
 
 ### 1.1 Projenin amacı
 
-Bu projenin amacı, kullanıcının verdiği metni veya dosyayı parola ile şifreleyip çözebilen bir komut satırı aracı üretmektir. Hedef yalnızca “çalışan bir program” yazmak değildir. Hedef; hazır ve incelenmiş bir kriptografi kütüphanesi kullanarak, güvenli yazılım geliştirme prensiplerine uygun ve gerekçelendirilebilir teknik kararlar almaktır.
+Bu projenin amacı, kullanıcının verdiği metni veya dosyayı parola (veya keyfile) ile şifreleyip çözebilen bir komut satırı aracı üretmektir. Hedef yalnızca “çalışan bir program” yazmak değildir. Hedef; hazır ve incelenmiş bir kriptografi kütüphanesi kullanarak, güvenli yazılım geliştirme prensiplerine uygun ve gerekçelendirilebilir teknik kararlar almaktır.
 
 Görev tanımındaki kritik kısıt açıktır: kendi şifreleme algoritması yazılmayacaktır. Bu kısıt, işi bir uygulama egzersizinden çıkarıp mühendislik kararı problemine dönüştürür. Soru “şifrelemeyi nasıl icat ederim?” değil; “hangi standart bileşenleri, hangi tehdit modeline göre, neden böyle birleştiririm?” sorusudur.
+
+v1.3 ile kapsam, öğrenme amaçlı olarak hassas veri keşfi (`scan` / `protect`), secrets’siz denetim kaydı ve keyfile secret kaynağı ile genişletilmiştir. Bu ekler kurumsal ürün yerine geçmez; sorumluluk ayrımını göstermek içindir. Ayrıntılı aşama kaydı: [`OGRENME_RAPORU.md`](./OGRENME_RAPORU.md).
 
 ### 1.2 Çözmek istediği problem
 
@@ -23,9 +27,16 @@ Bu araç, içeriği parola bilinmeden anlamlı hale gelmeyecek bir şifreli pake
 
 ### 1.3 Proje kapsamı
 
-**Kapsam içinde:** metin/dosya şifreleme ve çözme, parola tabanlı anahtar türetme, authenticated encryption, sürümlenebilir dosya formatı, temel hata yönetimi, birim testler ve kararların belgelenmesi.
+**Kapsam içinde:**
 
-**Kapsam dışında:** KMS/HSM, ağ üzerinden anahtar dağıtımı, çok kullanıcılı erişim kontrolü, secure enclave, anti-forensic özellikler ve grafik arayüz.
+- Metin/dosya şifreleme ve çözme; parola veya keyfile ile anahtar türetme
+- Authenticated encryption (AES-256-GCM) ve sürümlenebilir BSA1 formatı
+- `inspect` / `verify`, benchmark, self-check
+- Hassas veri keşfi (`scan`) ve keşif sonrası toplu koruma (`protect`) — öğrenme metaforu
+- Secrets’siz JSONL audit ve SIEM eşleme dokümanı
+- Birim testler, CI (lint / SAST / dependency audit), CVD (`SECURITY.md`)
+
+**Kapsam dışında:** KMS/HSM, gerçek PAM/vault ürünü, Splunk entegrasyonu, ağ üzerinden anahtar dağıtımı, çok kullanıcılı erişim kontrolü, secure enclave, anti-forensic özellikler ve grafik arayüz.
 
 Bu sınırlar, aracın öğrenme ve kişisel kullanım CLI’si olduğunu netleştirmek içindir. Ürün vaadi abartılmamıştır.
 
@@ -164,19 +175,22 @@ GCM seçilmeseydi risk artardı: bütünlüğün unutulması veya iki mekanizman
 
 ## 4. Yazılım Mimarisi
 
-Mimari bilerek ince tutuldu. Amaç enterprise klasör şişirmek değil; güvenlik çekirdeğini arayüzden ayırmaktır.
+Mimari bilerek ince tutuldu. Amaç enterprise klasör şişirmek değil; güvenlik çekirdeğini arayüzden ve yardımcı sorumluluklardan ayırmaktır.
 
 ```mermaid
-flowchart LR
-  U[Kullanıcı / CLI] --> C[cli katmanı]
-  C --> K[crypto_ops katmanı]
-  K --> L[cryptography kütüphanesi]
+flowchart TB
+  U[Kullanıcı / CLI] --> C[cli]
+  C --> K[crypto_ops]
+  C --> D[discovery]
+  C --> S[secrets_io]
+  C --> A[audit JSONL]
+  K --> L[cryptography]
   C --> F[Dosya sistemi / stdin-stdout]
 ```
 
 ### 4.1 `cli` katmanı
 
-**Görevi:** Argümanları işlemek, parolayı almak, giriş/çıkışı yönetmek, kullanıcıya durum bildirmek.
+**Görevi:** Argümanları işlemek, secret almak, giriş/çıkışı yönetmek, kullanıcıya durum bildirmek, audit olaylarını yazmak.
 
 **Neden ayrı?** argparse, getpass ve path detayları şifreleme mantığına karışmamalıdır. Karışırsa test zorlaşır; güvenlik kuralları UI içine gömülür.
 
@@ -190,9 +204,15 @@ flowchart LR
 
 **Sürdürülebilirlik:** Format sürümü değişirse değişiklik alanı sınırlı kalır.
 
-### 4.3 Test katmanı
+### 4.3 `discovery` ve `secrets_io` (v1.3)
 
-**Görevi:** Round-trip ve negatif güvenlik senaryolarını otomatik doğrulamak.
+**`discovery`:** Desen tabanlı hassas veri keşfi ve maskeli raporlama. Şifreleme çekirdeğinden ayrı tutulur; false positive riski keşif katmanına aittir.
+
+**`secrets_io`:** Keyfile okuma ve `--password` ile birlikte kullanım yasağı. Secret kaynağını CLI argümanından ayırır; vault ürünü değildir.
+
+### 4.4 Test katmanı
+
+**Görevi:** Round-trip, negatif güvenlik senaryoları, keşif/koruma ve audit’te secret sızıntısı olmadığını otomatik doğrulamak.
 
 **Neden ayrı?** Bütünlük ihlali gibi durumlar yalnızca mutlu yol denemesiyle yakalanmaz.
 
@@ -305,13 +325,13 @@ Her önlem aynı zincirle anlatılmıştır.
 **Uygulama:** `AuthenticationError` tek mesaj; `FormatError` magic/sürüm/uzunluk için.  
 **Avantaj:** Kullanıcı yönlendirilir; saldırgana auth ayrımı mümkün olduğunca verilmez.
 
-### 6.8 Parola alma yöntemi
+### 6.8 Parola / secret alma yöntemi
 
 **Problem:** Komut satırı argümanındaki parola process listesi ve history’de görünebilir.  
 **Risk:** Yerel gözlem veya loglar parolayı ele geçirebilir.  
-**Çözüm:** Varsayılan interaktif gizli giriş; demo bayrağı varsa uyarı.  
-**Uygulama:** Gerçek yol getpass; test kolaylığı bilinçli risk olarak işaretlenir.  
-**Avantaj:** Varsayılan yol daha güvenli tutulur.
+**Çözüm:** Varsayılan interaktif gizli giriş; isteğe bağlı `--keyfile`; demo bayrağı (`--password`) varsa uyarı.  
+**Uygulama:** Gerçek yol getpass veya keyfile; `--password` ile `--keyfile` birlikte kullanılamaz.  
+**Avantaj:** Varsayılan yol daha güvenli tutulur; secret kaynağı audit’te `auth_source` ile izlenir (içerik yazılmaz).
 
 ### 6.9 Anahtar bellek temizliği
 
@@ -365,6 +385,10 @@ Testler “kod çalışıyor mu?”dan çok “hangi güvenlik varsayımı kır�
 | Başlık / AAD bağlama | Format alanlarının kopuk kalmaması | Yanlış sürümle sessiz yorumlama |
 | Magic / kısa paket | Parser dayanıklılığı | Belirsiz girdide öngörülemeyen davranış |
 | Metadata inspect | İnceleme yolunun sınırını korumak | Debug sırasında gizli içeriğin açılması |
+| Scan maskeleme | Keşif çıktısında ham PII yok | Raporun kendisinin sızıntı kaynağı olması |
+| Protect dry-run / round-trip | Toplu koruma sözleşmesi | Yanlış hedefe yazma, eksik şifreleme |
+| Keyfile vs `--password` | Secret kaynağı kuralları | İkisinin birlikte kullanımı, CLI sızıntısı |
+| Audit yasaklı alanlar | Telemetride secret yok | Log’a parola/PII yazılması |
 
 Bu set kapsamlı sızma testi değildir. Tasarımın dayandığı birkaç güvenlik sözleşmesini otomatik kilitler.
 
@@ -393,13 +417,53 @@ Bu set kapsamlı sızma testi değildir. Tasarımın dayandığı birkaç güven
 
 ### 9.3 Bilinçli olarak yapılmayan özellikler
 
-KMS entegrasyonu, anahtar dosyası modeli, sıkıştırma+şifreleme, çoklu alıcı için public-key sarma, donanım token desteği ve iddialı güvenlik etiketleri bilinçli olarak eklenmedi. Her ekstra özellik yeni tehdit yüzeyi açar; kapsam dar tutuldu.
+KMS entegrasyonu, gerçek PAM/vault ürünü, Splunk bağlantısı, sıkıştırma+şifreleme, çoklu alıcı için public-key sarma, donanım token desteği ve iddialı güvenlik etiketleri bilinçli olarak eklenmedi. Her ekstra özellik yeni tehdit yüzeyi açar; kapsam dar tutuldu.
+
+**Not:** v1.3’teki `--keyfile`, `scan`/`protect` ve audit JSONL birer **öğrenme metaforudur**; kurumsal Voltage / Delinea / Splunk yerine geçmez. Ayrıntı: bölüm 10 ve [`OGRENME_RAPORU.md`](./OGRENME_RAPORU.md).
 
 ### 9.4 Gelecekte geliştirilebilecek noktalar
 
 Argon2id araştırması, KDF maliyetini kullanım profiline göre ayarlama, büyük dosya bellek/akış ölçümü, bağımlılık güncelleme pratikleri, fuzzing ve kurumsal ihtiyaçta KMS ile anahtar sarma değerlendirilebilir. Özellik eklemek otomatik olarak daha güvenli demek değildir; önce tehdit modeli güncellenmelidir.
 
-**v1.3 notu:** Konsalt güvenlik portföyüne öğrenme köprüleri eklendi (`scan`/`protect`, `--keyfile`, SIEM mapping). Ayrıntı: `OGRENME_RAPORU.md`.
+---
+
+## 10. v1.3 Genişletmeler — Keşif, Denetim ve Secret Kaynağı
+
+Bu bölüm, çekirdek AEAD tasarımını bozmadan eklenen öğrenme katmanlarını özetler. Detaylı aşama anlatımı [`OGRENME_RAPORU.md`](./OGRENME_RAPORU.md) içindedir.
+
+### 10.1 Hassas veri keşfi ve koruma
+
+| Bileşen | Karar | Gerekçe |
+|---|---|---|
+| `scan` | Regex tabanlı, maskeli bulgu | Önce keşfet fikrini göstermek; ham PII’yi raporlamamak |
+| `protect` | Bulgulu dosyaları BSA1’e dönüştür | Keşif → koruma zinciri; `--dry-run` ile önce plan |
+| Sınır | Üretim DLP / Voltage değil | False positive kabul edilir; KMS/politika yok |
+
+### 10.2 Secrets’siz audit ve SIEM köprüsü
+
+| Bileşen | Karar | Gerekçe |
+|---|---|---|
+| JSONL audit | Sabit olay adları (`encrypt_ok`, `decrypt_fail`, …) | SIEM’in beklediği temiz telemetri |
+| Yasak alanlar | Parola, key, plaintext, ham PII | Log’un güvenlik açığına dönüşmesini engellemek |
+| Doküman | `docs/siem-mapping.md` | Örnek alert fikirleri; gerçek Splunk yok |
+
+### 10.3 Keyfile (vault metaforu)
+
+| Bileşen | Karar | Gerekçe |
+|---|---|---|
+| `--keyfile` | Secret’ı dosyadan oku | Secret kaynağını CLI argümanından ayırmak |
+| Çakışma yasağı | `--password` ile birlikte kullanılamaz | Belirsiz auth kaynağı üretmemek |
+| Sınır | Rotate / onay / session record yok | Delinea PAM ürünü değil; katman ayrımı gösterimi |
+
+### 10.4 Konsalt portföy eşlemesi (özet)
+
+| Konsalt ürünü | Bu projedeki karşılık |
+|---|---|
+| OpenText Voltage | `scan`, `protect` |
+| Delinea | `--keyfile` |
+| Splunk ES | `--audit-log` + SIEM mapping |
+
+Tam harita: [`docs/konsalt-guvenlik-haritasi.md`](./docs/konsalt-guvenlik-haritasi.md).
 
 ---
 
@@ -413,8 +477,9 @@ Bu bölüm, aracın **ne koruduğunu** ve **neyi vaat etmediğini** netleştirir
 | Parola | Çevrimdışı sözlük / kaba kuvvet | Yüksek (zayıf parolada) | Scrypt + unique salt | Keylogger, shoulder surfing |
 | `.bsa` paketi | Bayt değiştirme / kesme | Orta | GCM tag, uzunluk, magic/version | İnkâr edilemezlik (non-repudiation) |
 | Header alanları | Salt/nonce/version oynama | Orta | Auth fail veya FormatError; AAD | Header’ın gizliliği (gerekmez) |
-| CLI süreci | `ps`, shell history | Orta | Varsayılan getpass; `--password` uyarısı | Zorla güvensiz kullanım |
-| Kütüphane | Tedarik zinciri | Düşük–orta | Bilinen paket, sürüm sabitleme önerisi | Tam SBOM / imza doğrulama |
+| CLI süreci | `ps`, shell history | Orta | Varsayılan getpass / keyfile; `--password` uyarısı | Zorla güvensiz kullanım |
+| Keşif raporu | Maskelenmemiş PII | Orta | Maskeli bulgu; audit yasak alanları | Üretim DLP doğruluğu |
+| Kütüphane | Tedarik zinciri | Düşük–orta | Bilinen paket, CI `pip-audit` | Tam SBOM / imza doğrulama |
 
 **Güven sınırı:** Saldırganın `.bsa` dosyasına ve (isteğe bağlı) zayıf parolaya erişimi vardır; güvenli bir HSM veya OS zorunlu değildir. Araç “data at rest” için kişisel şifreleme sunar; güvenli mesajlaşma veya çok kullanıcılı ACL değildir.
 
@@ -499,6 +564,8 @@ flowchart TB
 - Yan kanal (cache-timing, power) analizi kapsam dışıdır.
 - Yedekleme, dosya izinleri ve güvenli silme (shred) kullanıcı operasyonudur.
 - `--password` bayrağı demo kolaylığıdır; production anti-pattern’dir.
+- `--keyfile` vault değildir; dosya izinleri ve rotate kullanıcıya aittir.
+- `scan` regex tabanlıdır; false positive / false negative üretilebilir.
 
 ---
 
@@ -508,7 +575,7 @@ flowchart TB
 |---|---|---|
 | Orta | Argon2id + format v2 KDF alanı | Modern parola hashing |
 | Orta | Chunked / stream AEAD formatı | Büyük dosya RAM |
-| Düşük | Keyfile + parola hibrit | Entropi artışı |
+| Düşük | Keyfile + parola hibrit (ikili faktör) | Entropi artışı; tek başına keyfile zaten v1.3’te var |
 | Düşük | Fuzzing (header parser) | Parser dayanıklılığı |
 | Kurumsal | KMS ile anahtar sarma | Merkezi yönetim |
 | Operasyon | Dependabot + imzalı release | Tedarik zinciri |
@@ -524,8 +591,9 @@ Her madde önce threat model güncellemesi ister; özellik ≠ güvenlik.
 3. **Negatif testler sözleşmeyi kilitler.** Yanlış parola ile tag bozmanın aynı mesajı vermesi bilinçli bir test konusudur.
 4. **Dokümantasyon savunmadır.** Sunumda “neden?” sorusuna cevap veremeyen doğru kod bile zayıf görünür.
 5. **Dürüst sınırlar güven yaratır.** “Kurumsal HSM” iddiası olmayan bir README, abartılı iddiadan daha profesyoneldir.
-6. **Küçük CLI yüzey alanı bile operasyonel güvenlik taşır.** `getpass` vs `--password` kararı kriptografi kadar önemlidir.
+6. **Küçük CLI yüzey alanı bile operasyonel güvenlik taşır.** `getpass` / `--keyfile` vs `--password` kararı kriptografi kadar önemlidir.
 7. **JR SecEng barı:** disclosure süreci (`SECURITY.md`), SAST/dependency audit, secure file defaults ve audit-without-secrets enterprise adaylığı güçlendirir.
+8. **Sorumluluk ayrımı öğrenilir:** Keşif (Voltage metaforu), secret kaynağı (PAM metaforu) ve telemetri (SIEM metaforu) şifreleme çekirdeğinden ayrı tutulmalıdır.
 
 ---
 
@@ -571,4 +639,6 @@ Bu raporun amacı aracın kusursuz bir güvenlik ürünü olduğunu iddia etmek 
 - NIST SP 800-38D — GCM için blok şifre modu önerileri
 - RFC 7914 — scrypt parola tabanlı anahtar türetme fonksiyonu
 - OWASP Password Storage Cheat Sheet
+- OWASP Cryptographic Storage / Logging Cheat Sheet (özet hizalama)
 - Konsalt Staj Programı 2026 — Bonus Havuzu görev tanımı
+- [Konsalt Güvenlik Çözümleri](https://www.konsalt.com.tr/cozumlerimiz/guvenlik-cozumleri/) — öğrenme bağlamı (ürün klonu değil)
