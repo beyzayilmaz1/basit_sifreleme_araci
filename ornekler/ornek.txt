@@ -1,0 +1,3 @@
+Merhaba — bu dosya Basit Sifreleme Araci ornegidir.
+Staj bonus gorevi: dosya/metin sifreleme CLI.
+Turkce karakter testi: şğıüöç ŞĞİÜÖÇ

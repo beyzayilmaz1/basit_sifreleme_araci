@@ -1,0 +1,5 @@
+# Runtime
+cryptography>=42.0.0,<47
+
+# Dev / CI (opsiyonel lokal kurulum)
+# ruff, bandit, pip-audit — GitHub Actions içinde kurulur
