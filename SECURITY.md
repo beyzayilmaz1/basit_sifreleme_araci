@@ -47,7 +47,7 @@ Teknik tehdit modeli: [`report.md`](./report.md) · Kontrol eşlemesi: [`SECURIT
 
 ## Controls mapping (junior bar)
 
-| Beklenti (Cisco/IBM JR SecEng) | Bu projedeki karşılık |
+| Beklenti (JR SecEng) | Bu projedeki karşılık |
 |---|---|
 | Doğru crypto kullanımı | AES-256-GCM + Scrypt; kendi algo yok |
 | Threat model | `report.md` STRIDE özeti |
